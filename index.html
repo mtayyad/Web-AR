@@ -5,7 +5,7 @@
   <title>WebAR Surface Tracking</title>
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <style>
-    body { margin: 0; overflow: hidden; }
+    body { margin: 0; overflow: hidden; font-family: system-ui, -apple-system, BlinkMacSystemFont, sans-serif; }
     #enter-ar-btn {
       position: absolute;
       bottom: 20px;
@@ -18,11 +18,26 @@
       border: none;
       font-size: 16px;
       z-index: 10;
+      cursor: pointer;
+    }
+
+    #status {
+      position: absolute;
+      top: 10px;
+      left: 50%;
+      transform: translateX(-50%);
+      padding: 6px 12px;
+      background: rgba(0, 0, 0, 0.6);
+      color: #fff;
+      font-size: 12px;
+      border-radius: 999px;
+      z-index: 10;
     }
   </style>
 </head>
 <body>
   <button id="enter-ar-btn">Start AR</button>
+  <div id="status">Loading…</div>
 
   <script type="module">
     import * as THREE from 'https://unpkg.com/three@0.159.0/build/three.module.js';
@@ -35,16 +50,24 @@
     let model = null;
 
     const btn = document.getElementById('enter-ar-btn');
+    const statusEl = document.getElementById('status');
 
     init();
 
     async function init() {
+      // Basic feature check
+      if (!window.isSecureContext) {
+        statusEl.textContent = 'Page HTTPS ya localhost par chalni chahiye.';
+      }
+
       // Scene / camera / renderer
       scene = new THREE.Scene();
       camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.01, 50);
       renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
       renderer.xr.enabled = true;
+       // Local-floor prefer, fallback local
+      renderer.xr.setReferenceSpaceType('local-floor');
       document.body.appendChild(renderer.domElement);
 
       // Light
@@ -62,14 +85,23 @@
       // Load 3D model (replace path with your .glb)
       const loader = new GLTFLoader();
       loader.load(
-        'model.glb', // yahan apna model path rakhein
+        'model.glb', // yahan apna model path rakhein (same folder mein file rakhein)
         (gltf) => {
           model = gltf.scene;
           model.visible = false;
           scene.add(model);
+          statusEl.textContent = 'Model loaded. "Start AR" dabao.';
         },
-        undefined,
-        (e) => console.error(e)
+        (xhr) => {
+          if (xhr.total) {
+            const p = (xhr.loaded / xhr.total) * 100;
+            statusEl.textContent = `Model loading: ${p.toFixed(0)}%`;
+          }
+        },
+        (e) => {
+          console.error(e);
+          statusEl.textContent = 'Model load error. Console check karo.';
+        }
       );
 
       // AR Button (hidden default UI, hum custom button use kar rahe)
@@ -79,31 +111,61 @@
       arButton.style.display = 'none'; // hide default
 
       btn.onclick = async () => {
+        console.log('AR button clicked');
+
         if (!navigator.xr) {
-          alert('WebXR supported nahi hai is device/browser par.');
+          alert('WebXR supported nahi hai is device/browser par. Android Chrome try karein.');
+          statusEl.textContent = 'WebXR available nahi.';
           return;
         }
 
-        const session = await navigator.xr.requestSession('immersive-ar', {
-          requiredFeatures: ['hit-test', 'local-floor']
-        });
-        renderer.xr.setSession(session);
+        try {
+          const supported = await navigator.xr.isSessionSupported('immersive-ar');
+          if (!supported) {
+            alert('Is device/browser par immersive-ar supported nahi hai.');
+            statusEl.textContent = 'immersiVE-AR supported nahi.';
+            return;
+          }
+        } catch (err) {
+          console.warn('isSessionSupported error', err);
+        }
 
-        session.addEventListener('end', () => {
-          hitTestSource = null;
-        });
+        try {
+          const session = await navigator.xr.requestSession('immersive-ar', {
+            requiredFeatures: ['hit-test', 'local-floor'],
+            optionalFeatures: ['local']
+          });
+          statusEl.textContent = 'AR session start ho gaya.';
+          renderer.xr.setSession(session);
 
-        const refSpace = await session.requestReferenceSpace('local-floor');
-        xrRefSpace = refSpace;
+          session.addEventListener('end', () => {
+            hitTestSource = null;
+            statusEl.textContent = 'AR session end ho gaya.';
+            btn.style.display = 'block';
+          });
 
-        const viewerSpace = await session.requestReferenceSpace('viewer');
-        hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+          // Reference space (local-floor prefer, fallback local)
+          try {
+            xrRefSpace = await session.requestReferenceSpace('local-floor');
+          } catch {
+            xrRefSpace = await session.requestReferenceSpace('local');
+          }
 
-        renderer.setAnimationLoop(onXRFrame);
-        btn.style.display = 'none';
+          const viewerSpace = await session.requestReferenceSpace('viewer');
+          hitTestSource = await session.requestHitTestSource({ space: viewerSpace });
+
+          renderer.setAnimationLoop(onXRFrame);
+          btn.style.display = 'none';
+        } catch (err) {
+          console.error('AR session start error', err);
+          alert('AR session start nahi ho saka. Console check karo.');
+          statusEl.textContent = 'AR session error.';
+        }
       };
 
       window.addEventListener('resize', onWindowResize);
+
+      statusEl.textContent = 'Ready. Model load ka wait ho sakta hai.';
     }
 
     function onWindowResize() {
